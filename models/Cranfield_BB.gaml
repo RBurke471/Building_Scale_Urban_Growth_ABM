@@ -1,6 +1,6 @@
 /**
  *  vector
- *  Author: administrateur
+ *  Author: Richard Burke
  *  Description: 
  */
 
@@ -25,10 +25,11 @@ global {
 	
 	float w1 <- 0.2; //Weight value for building density criteria
 	float w2 <- 0.0; //
-	float w3 <- 1.0; //Weight value for roads and rivers criteria
+	float w3 <- 0.8; //Weight value for roads and rivers criteria
 	
-	int n <- 387;
-	int nb_build <- 387; //Number of buildings to construct each cycle
+	// The lower these values the faster the simulation runs, e.g. could consider 6 month timesteps.
+	int n <- 100; // Number of building blocks to choose to construct buildings in each cycle.
+	int nb_build <- 1; //Number of buildings to construct in each building block in each cycle.
 	
 	float distance_roads_rivers <- 1.0;
 	
@@ -53,16 +54,13 @@ global {
 			dist <- matrix(csv_file(dist_path, ";"));
 		}
 		do building_block_creation;
-		if (save_dist) {
-			do compute_distances;
-		}
+		
 	}
 	
+	// Execute reflex when criteria weights are not equal to 0.
 	reflex global_dynamic when: w1 != 0 or w3 != 0 {
-		ask building_block {
-			color <- #red;
-		}
-		list<building_block> bb_to_builds <- building_block where (each.possible_construction) ;
+		//Ask each building block to compute criteria and it constructability.
+		list<building_block> bb_to_builds <- building_block where (each.possible_construction); //List building blocks which are possible to have construction on.
 		ask bb_to_builds{
 			do compute_criteria;
 		}
@@ -71,8 +69,10 @@ global {
 		ask bb_to_builds{
 			do compute_land_value;
 		}
-		list<building_block> sorted_bb <- shuffle(bb_to_builds) sort_by (- each.constructability); //Creat list of building_block sorted by constructability 
-		loop i from: 0 to: min([n, length(sorted_bb)]){
+		// Ask the n building blocks with higher constructability to construct buildings.
+		list<building_block> sorted_bb <- bb_to_builds sort_by (each.constructability); //Create list of building_block sorted by constructability.
+		// Loop number of times, whichever is minimum value.
+		loop i from: 0 to: length(sorted_bb){
 			building_block bb_to_build <- sorted_bb[i];
 			ask bb_to_build {
 				loop times: nb_build {
@@ -83,28 +83,11 @@ global {
 	}
 	
 	
-	reflex end_simulation when: date = 2100 and not batch_mode{
+	reflex end_simulation when: current_date = 2050 and not batch_mode{
 		do pause;
 	}
 	 
-	action compute_distances { 
-		int nb <- length(building_block);
-		dist <- 0 as_matrix {nb,nb};
-		loop i from: 0 to: nb - 1 {
-			building_block bb1 <- building_block[i];
-			loop j from: 0 to:  nb - 1   {
-				building_block bb2 <- building_block[j];
-				if (bb1 = bb2) {
-					dist[i,j] <- 0.0;
-				} else {
-					dist[i,j] <- topology(road_network) distance_between([bb1,bb2]);
-				}
-		 	}		 	
-		 } 
-		 save string(dist) to: dist_path type:"text";
-		  
-	}
-	
+
 	action building_block_creation {
 		if (not save_dist) {
 			ask building_block {
@@ -153,30 +136,23 @@ species Cranfield {
 }
 
 
-
-
 species building_block {
 	rgb color <- #red;
 	list<building> buildings;
-	geometry empty_space; 
-	bool possible_construction <- true ;  //boolean to determine if construction is possible
+	geometry empty_space; //Create geometry object for empty space.
+	bool possible_construction <- true ;  //boolean to determine if construction is possible.
 	float free_space_rate;
 	float constructability;
 	float crit_roads_rivers;
 	
-	
-	action distance_to_roads {
-		
-	}
-	
 	action build_empty_space {
 		empty_space <- copy(shape); 
 		loop bd over: buildings {
-			empty_space <- empty_space - (bd + 2.0); //
+			empty_space <- empty_space - (bd); //
 		}
 		
 		if (empty_space != nil) {
-			list<geometry> geoms_to_keep <- empty_space.geometries where (each != nil and each.area > 200);
+			list<geometry> geoms_to_keep <- empty_space.geometries where (each != nil and each.area > 0);
 			if (not empty(geoms_to_keep)) {
 				empty_space <- geometry(geoms_to_keep);
 			} else {
@@ -187,7 +163,7 @@ species building_block {
 	}
 	
 	action update_empty_space(building bd) {
-		empty_space <- empty_space - (bd + 2.0); //Remove buildings (with 2m buffer) from empty space
+		empty_space <- empty_space - (bd); //Remove buildings (with 2m buffer) from empty space
 		//If empty spaces are not equal to nil then list their geometries greater than 200m2
 		if (empty_space != nil) {
 			list<geometry> geoms_to_keep <- empty_space.geometries where (each != nil and each.area > 200);
@@ -202,9 +178,15 @@ species building_block {
 	
 	action compute_criteria {
 	
-	list roads <- road at_distance distance_roads_rivers;  
-	geometry shape_buffer <- shape + distance_roads_rivers;
-	crit_roads_rivers <-sum(roads collect (each.shape inter shape_buffer).area) / envelope(shape).area;
+	//list roads <- road at_distance distance_roads_rivers;
+	//list rivers <-river at_distance distance_roads_rivers;
+	//geometry shape_bufer <- shape + distance_roads_rivers;
+	//crit_roads_rivers <-(sum(roads collect (each.shape inter shape_bufer).area) + sum(rivers collect (each.shape inter shape_bufer).area)) / envelope(shape).area;
+	
+   road closest_road <- road with_min_of(each distance_to self);
+   crit_roads_rivers <-  closest_road  distance_to self;
+
+	
 		
 	}
 	//Compute building density, quantity of roads and rivers, and overall constructability.
@@ -214,35 +196,35 @@ species building_block {
 	}
 
 	
-	
-	action building_construction {
-		float limit <- world.shape.area; //Limit building construction
-		list<building> possible_buildings <- (buildings);
+	//Action to create buildings.
+	action building_construction  {
+		float limit <- world.shape.area; //Limit building construction to world area
+		list<building> possible_buildings <- (buildings); //Create a list called possible_buildings 
 		if empty(possible_buildings) {
 			possible_construction<- false;
 			write name;
 			return;
 		}
-		bool bd_built <- false;
+		bool bd_built <- false; //Boolean to indicate if building_block has had construction in it.
 		building bd <- nil;
 		
+		// Get one building from the possible buildings to use in construction
 		loop while: true {
 			building one_building <- one_of (possible_buildings where (envelope(each.shape).area < limit));
 			if (one_building = nil) {
 				break;
 			}
-			geometry new_building <- copy(one_building.shape);
-			float size <- min([new_building.width,new_building.height]) ;
+			geometry new_building <- copy(one_building.shape); //Copy the selected building to create a new_building variable
+			float size <- min([new_building.width,new_building.height]); //Get the area of the new_building.
 			
-			geometry space <- empty_space reduced_by size;
+			geometry space <- empty_space - size; //Remove area of building from empty_space.
+			//If space space is not equal to nothing and greater in area than 0.0. 
 			if ((space != nil) and (space.area > 0.0)) {
-				agent closest_road_river <- (road) closest_to space;
+				agent closest_road_river <- (road) closest_to space; //Create closest_road_river agent using the road closest to space.
 				create building with:[ shape:: new_building, location::((closest_road_river closest_points_with space)[1]),type::one_building.type] {
 					myself.buildings << self;
 					build_year <- current_date.year; //Add simulation year to attribute table (build_year column).
 					bd <- self;
-					switch type {
-					}
 				}
 				bd_built <- true;
 				break;
@@ -252,9 +234,8 @@ species building_block {
 		}
 		
 		if (bd_built) {
-			do update_empty_space(bd);	
-		} else {
-			possible_construction<- false;
+			do update_empty_space(bd);
+			possible_construction<- false;  //Don't allow any further buildings to be built in the same block.
 		}
 	}
 	
